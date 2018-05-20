@@ -85,6 +85,8 @@ import           Nix.Parser
 import           Nix.Render
 import           Nix.Scope
 import           Nix.Thunk
+import           Nix.Type.Type hiding (Type(..))
+import           Nix.Type.Type (Type((:~>)))
 import           Nix.Utils
 import           Nix.Value
 import           Nix.XML
@@ -104,14 +106,15 @@ builtins = do
 
     fullBuiltinsList = map go <$> builtinsList
       where
-        go b@(Builtin TopLevel _) = b
-        go (Builtin Normal (name, builtin)) =
-            Builtin TopLevel ("__" <> name, builtin)
+        go b@(Builtin TopLevel _ _) = b
+        go (Builtin Normal (name, builtin) p) =
+            Builtin TopLevel ("__" <> name, builtin) p
 
 data BuiltinType = Normal | TopLevel
 data Builtin m = Builtin
     { _kind   :: BuiltinType
     , mapping :: (Text, NThunk m)
+    , _type   :: Type
     }
 
 valueThunk :: forall e m. MonadNix e m => NValue m -> NThunk m
@@ -123,27 +126,31 @@ force' = force ?? pure
 builtinsList :: forall e m. MonadNix e m => m [ Builtin m ]
 builtinsList = sequence [
       do version <- toValue ("2.0" :: Text)
-         pure $ Builtin Normal ("nixVersion", version)
+         pure $ Builtin Normal ("nixVersion", version) typeString
 
     , do version <- toValue (5 :: Int)
-         pure $ Builtin Normal ("langVersion", version)
+         pure $ Builtin Normal ("langVersion", version) typeInt
 
-    , add0 Normal   "nixPath"                    nixPath
-    , add  TopLevel "abort"                      throw_ -- for now
-    , add2 Normal   "add"                        add_
-    , add2 Normal   "all"                        all_
-    , add2 Normal   "any"                        any_
-    , add  Normal   "attrNames"                  attrNames
-    , add  Normal   "attrValues"                 attrValues
-    , add  TopLevel "baseNameOf"                 baseNameOf
-    , add2 Normal   "catAttrs"                   catAttrs
-    , add2 Normal   "compareVersions"            compareVersions_
-    , add  Normal   "concatLists"                concatLists
-    , add' Normal   "concatStringsSep"           (arity2 Text.intercalate)
-    , add0 Normal   "currentSystem"              currentSystem
-    , add0 Normal   "currentTime"                currentTime_
-    , add2 Normal   "deepSeq"                    deepSeq
-
+    , add0 Normal   "nixPath"                    nixPath                    typePath
+    , add  TopLevel "abort"                      throw_                     typeNull -- throw_ for now
+    , add2 Normal   "add"                        add_                       (manyT [ typeInt :~> typeInt :~> typeInt
+                                                                                   , typeInt :~> typeFloat :~> typeFloat
+                                                                                   , typeFloat :~> typeInt :~> typeFloat
+                                                                                   , typeFloat :~> typeFloat :~> typeFloat
+                                                                                   ])
+    , add2 Normal   "all"                        all_                       undefined --(typeFun [varT "a", typeBool] :~> listT [varT "a"] :~> typeBool)
+    , add2 Normal   "any"                        any_                       undefined --(typeFun [varT "a", typeBool] :~> listT [varT "a"] :~> typeBool)
+    , add  Normal   "attrNames"                  attrNames                  undefined --(typeSet :~> listT [typeString])
+    , add  Normal   "attrValues"                 attrValues                 undefined --(setT True (AttrSet (varT "a")) :~> listT [varT "a"])
+    , add  TopLevel "baseNameOf"                 baseNameOf                 (typeString :~> typeString)
+    , add2 Normal   "catAttrs"                   catAttrs                   undefined --(typeString :~> listT [setT True (AttrSet (varT "a"))]
+                                                                                      --    :~> listT [varT "a"])
+    , add2 Normal   "compareVersions"            compareVersions_           (typeString :~> typeString :~> typeInt)
+    , add  Normal   "concatLists"                concatLists                undefined --(listT [listT [varT "a"]] :~> listT [varT "a"])
+    , add' Normal   "concatStringsSep"           (arity2 Text.intercalate)  undefined --(typeString :~> listT [typeString] :~> typeString)
+    , add0 Normal   "currentSystem"              currentSystem              typeString
+    , add0 Normal   "currentTime"                currentTime_               typeInt
+    , add2 Normal   "deepSeq"                    deepSeq                    undefined --(varT "a" :~> varT "b" :~> varT "b")
     , add0 TopLevel "derivation" $(do
           -- This is compiled in so that we only parse and evaluate it once,
           -- at compile-time.
@@ -176,83 +183,103 @@ builtinsList = sequence [
 
     in (builtins.head outputsList).value|]
           [| cata Eval.eval expr |]
-      )
+    ) undefined
 
-    , add  TopLevel "derivationStrict"           derivationStrict_
-    , add  TopLevel "dirOf"                      dirOf
-    , add2 Normal   "div"                        div_
-    , add2 Normal   "elem"                       elem_
-    , add2 Normal   "elemAt"                     elemAt_
-    , add  Normal   "exec"                       exec_
-    , add0 Normal   "false"                      (return $ nvConstant $ NBool False)
-    , add  Normal   "fetchTarball"               fetchTarball
-    , add  Normal   "fetchurl"                   fetchurl
-    , add2 Normal   "filter"                     filter_
-    , add3 Normal   "foldl'"                     foldl'_
-    , add  Normal   "fromJSON"                   fromJSON
-    , add  Normal   "functionArgs"               functionArgs
-    , add2 Normal   "genList"                    genList
-    , add  Normal   "genericClosure"             genericClosure
-    , add2 Normal   "getAttr"                    getAttr
-    , add  Normal   "getEnv"                     getEnv_
-    , add2 Normal   "hasAttr"                    hasAttr
-    , add  Normal   "hasContext"                 hasContext
-    , add' Normal   "hashString"                 hashString
-    , add  Normal   "head"                       head_
-    , add  TopLevel "import"                     import_
-    , add2 Normal   "intersectAttrs"             intersectAttrs
-    , add  Normal   "isAttrs"                    isAttrs
-    , add  Normal   "isBool"                     isBool
-    , add  Normal   "isFloat"                    isFloat
-    , add  Normal   "isFunction"                 isFunction
-    , add  Normal   "isInt"                      isInt
-    , add  Normal   "isList"                     isList
-    , add  TopLevel "isNull"                     isNull
-    , add  Normal   "isString"                   isString
-    , add  Normal   "length"                     length_
-    , add2 Normal   "lessThan"                   lessThan
-    , add  Normal   "listToAttrs"                listToAttrs
-    , add2 TopLevel "map"                        map_
-    , add2 Normal   "match"                      match_
-    , add2 Normal   "mul"                        mul_
-    , add0 Normal   "null"                       (return $ nvConstant NNull)
-    , add  Normal   "parseDrvName"               parseDrvName
-    , add2 Normal   "partition"                  partition_
-    , add  Normal   "pathExists"                 pathExists_
-    , add  TopLevel "placeholder"                placeHolder
-    , add  Normal   "readDir"                    readDir_
-    , add  Normal   "readFile"                   readFile_
-    , add2 Normal   "findFile"                   findFile_
-    , add2 TopLevel "removeAttrs"                removeAttrs
-    , add3 Normal   "replaceStrings"             replaceStrings
-    , add2 TopLevel "scopedImport"               scopedImport
-    , add2 Normal   "seq"                        seq_
-    , add2 Normal   "sort"                       sort_
-    , add2 Normal   "split"                      split_
-    , add  Normal   "splitVersion"               splitVersion_
-    , add0 Normal   "storeDir"                   (return $ nvPath "/nix/store")
-    , add' Normal   "stringLength"               (arity1 Text.length)
-    , add' Normal   "sub"                        (arity2 ((-) @Integer))
-    , add' Normal   "substring"                  substring
-    , add  Normal   "tail"                       tail_
-    , add0 Normal   "true"                       (return $ nvConstant $ NBool True)
-    , add  TopLevel "throw"                      throw_
+    , add  TopLevel "derivationStrict"           derivationStrict_                    undefined
+    , add  TopLevel "dirOf"                      dirOf                                (manyT [ typePath :~> typePath
+                                                                                             , typeString :~> typeString
+                                                                                             ])
+    , add2 Normal   "div"                        div_                                 (manyT [ typeInt :~> typeInt :~> typeInt
+                                                                                             , typeInt :~> typeFloat :~> typeFloat
+                                                                                             , typeFloat :~> typeInt :~> typeFloat
+                                                                                             , typeFloat :~> typeFloat :~> typeFloat
+                                                                                             ])
+    , add2 Normal   "elem"                       elem_                                undefined --(varT "a" :~> listT [])
+    , add2 Normal   "elemAt"                     elemAt_                              undefined --(listT [varT "a"] :~> typeInt :~> varT "a")
+    , add  Normal   "exec"                       exec_                                undefined
+    , add0 Normal   "false"                      (return $ nvConstant $ NBool False)  typeBool
+    , add  Normal   "fetchTarball"               fetchTarball                         (typeString :~> typePath)
+    , add  Normal   "fetchurl"                   fetchurl                             (typeString :~> typePath)
+    , add2 Normal   "filter"                     filter_                              undefined --(typeFun [varT "a", typeBool]
+                                                                                        -- :~> listT [varT "a"] :~> listT [varT "a"])
+    , add3 Normal   "foldl'"                     foldl'_                             undefined --(typeFun [varT "a", varT "b", varT "a"]
+                                                                                        -- :~> varT "a" :~> listT [varT "b"] :~> varT "a")
+    , add  Normal   "fromJSON"                   fromJSON                            undefined --(typeString :~> setT [])
+    , add  Normal   "functionArgs"               functionArgs                        undefined --(setT [] :~> setT [])
+    , add2 Normal   "genList"                    genList                             undefined --(typeFun [typeInt, varT "a"]
+                                                                                        -- :~> typeInt :~> listT [varT "a"])
+    , add  Normal   "genericClosure"             genericClosure                      undefined
+    , add2 Normal   "getAttr"                    getAttr                             undefined
+    , add  Normal   "getEnv"                     getEnv_                             (typeString :~> typeString)
+    , add2 Normal   "hasAttr"                    hasAttr                             undefined --(typeString :~> :~> typeBool)
+    , add  Normal   "hasContext"                 hasContext                          undefined --(typeString :~> typeBool)
+    , add' Normal   "hashString"                 hashString                          (typeString :~> typeString :~>typeString)
+    , add  Normal   "head"                       head_                               undefined --(listT [varT "a"] :~> varT "a")
+    , add  TopLevel "import"                     import_                             undefined --(typePath :~> varT "a") is there any way to know "a" ?
+    , add2 Normal   "intersectAttrs"             intersectAttrs                      undefined
+    -- Do we need an Any type?
+    , add  Normal   "isAttrs"                    isAttrs                             (varT "a" :~> typeBool)
+    , add  Normal   "isBool"                     isBool                              (varT "a" :~> typeBool)
+    , add  Normal   "isFloat"                    isFloat                             (varT "a" :~> typeBool)
+    , add  Normal   "isFunction"                 isFunction                          (varT "a" :~> typeBool)
+    , add  Normal   "isInt"                      isInt                               (varT "a" :~> typeBool)
+    , add  Normal   "isList"                     isList                              (varT "a" :~> typeBool)
+    , add  TopLevel "isNull"                     isNull                              (varT "a" :~> typeBool)
+    , add  Normal   "isString"                   isString                            (varT "a" :~> typeBool)
+    , add  Normal   "length"                     length_                             undefined --(listT [varT "a"] :~> typeInt)
+    , add2 Normal   "lessThan"                   lessThan                            undefined
+    , add  Normal   "listToAttrs"                listToAttrs                         undefined --(listT [])
+    , add2 TopLevel "map"                        map_                                undefined --(typeFun [varT "a", varT "b"]
+                                                                                          -- :~> listT [varT "a"] :~> listT [varT "a"])
+    , add2 Normal   "match"                      match_                              undefined --(typeString :~> typeString
+                                                                                          -- :~> manyT [typeNull, listT [typeString]])
+    , add2 Normal   "mul"                        mul_                                (manyT [ typeInt :~> typeInt :~> typeInt
+                                                                                            , typeInt :~> typeFloat :~> typeFloat
+                                                                                            , typeFloat :~> typeInt :~> typeFloat
+                                                                                            , typeFloat :~> typeFloat :~> typeFloat
+                                                                                            ])
+    , add0 Normal   "null"                       (return $ nvConstant NNull)         typeNull
+    , add  Normal   "parseDrvName"               parseDrvName                        (typeString :~> setT False [("name", typeString), ("version", typeString)])
+    , add2 Normal   "partition"                  partition_                          undefined
+    , add  Normal   "pathExists"                 pathExists_                         (typePath :~> typeBool)
+    , add  TopLevel "placeholder"                placeHolder                         (typeString :~> typeString) -- return value replaced at build time
+    , add  Normal   "readDir"                    readDir_                            undefined
+    , add  Normal   "readFile"                   readFile_                           (typePath :~> typeString)
+    , add2 Normal   "findFile"                   findFile_                           undefined
+    , add2 TopLevel "removeAttrs"                removeAttrs                         undefined
+    , add3 Normal   "replaceStrings"             replaceStrings                      undefined
+    , add2 TopLevel "scopedImport"               scopedImport                        undefined
+    , add2 Normal   "seq"                        seq_                                undefined
+    , add2 Normal   "sort"                       sort_                               undefined
+    , add2 Normal   "split"                      split_                              undefined
+    , add  Normal   "splitVersion"               splitVersion_                       undefined
+    , add0 Normal   "storeDir"                   (return $ nvPath "/nix/store")      typePath
+    , add' Normal   "stringLength"               (arity1 Text.length)                (typeString :~> typeInt)
+    , add' Normal   "sub"                        (arity2 ((-) @Integer))             (manyT [ typeInt :~> typeInt :~> typeInt
+                                                                                            , typeInt :~> typeFloat :~> typeFloat
+                                                                                            , typeFloat :~> typeInt :~> typeFloat
+                                                                                            , typeFloat :~> typeFloat :~> typeFloat
+                                                                                            ])
+    , add' Normal   "substring"                  substring                           (typeInt :~> typeInt :~> typeString :~> typeString)
+    , add  Normal   "tail"                       tail_                               undefined --(listT [varT "a"] :~> varT "a")
+    , add0 Normal   "true"                       (return $ nvConstant $ NBool True)  typeBool
+    , add  TopLevel "throw"                      throw_                              (typeString :~> varT "a")
     , add' Normal   "toJSON"
       (arity1 $ decodeUtf8 . LBS.toStrict . A.encodingToLazyByteString
-                           . toEncodingSorted)
-    , add2 Normal   "toFile"                     toFile
-    , add  Normal   "toPath"                     toPath
-    , add  TopLevel "toString"                   toString
-    , add  Normal   "toXML"                      toXML_
-    , add2 TopLevel "trace"                      trace_
-    , add  Normal   "tryEval"                    tryEval
-    , add  Normal   "typeOf"                     typeOf
-    , add  Normal   "unsafeDiscardStringContext" unsafeDiscardStringContext
-    , add2 Normal   "unsafeGetAttrPos"           unsafeGetAttrPos
-    , add  Normal   "valueSize"                  getRecursiveSize
+                           . toEncodingSorted)                                       undefined--(manyT [] :~> typeString)
+    , add2 Normal   "toFile"                     toFile                              (typeString :~> typeString :~> typePath)
+    , add  Normal   "toPath"                     toPath                              (typeString :~> typePath)
+    , add  TopLevel "toString"                   toString                            (varT "a" :~> typeString)
+    , add  Normal   "toXML"                      toXML_                              undefined --(varT "a" :~> typeString)
+    , add2 TopLevel "trace"                      trace_                              undefined
+    , add  Normal   "tryEval"                    tryEval                             undefined
+    , add  Normal   "typeOf"                     typeOf                              undefined --(varT "a" :~> typeString)
+    , add  Normal   "unsafeDiscardStringContext" unsafeDiscardStringContext          undefined
+    , add2 Normal   "unsafeGetAttrPos"           unsafeGetAttrPos                    undefined
+    , add  Normal   "valueSize"                  getRecursiveSize                    undefined --(varT "a" :~> typeInt)
   ]
   where
-    wrap t n f = Builtin t (n, f)
+    wrap t n p f = Builtin t (n, f) p
 
     arity1 f = Prim . pure . f
     arity2 f = ((Prim . pure) .) . f
@@ -260,13 +287,13 @@ builtinsList = sequence [
     mkThunk n = thunk . withFrame Info
         (ErrorCall $ "While calling builtin " ++ Text.unpack n ++ "\n")
 
-    add0 t n v = wrap t n <$> mkThunk n v
-    add  t n v = wrap t n <$> mkThunk n (builtin  (Text.unpack n) v)
-    add2 t n v = wrap t n <$> mkThunk n (builtin2 (Text.unpack n) v)
-    add3 t n v = wrap t n <$> mkThunk n (builtin3 (Text.unpack n) v)
+    add0 t n v p = wrap t n p <$> mkThunk n v
+    add  t n v p = wrap t n p <$> mkThunk n (builtin  (Text.unpack n) v)
+    add2 t n v p = wrap t n p <$> mkThunk n (builtin2 (Text.unpack n) v)
+    add3 t n v p = wrap t n p <$> mkThunk n (builtin3 (Text.unpack n) v)
 
-    add' :: ToBuiltin m a => BuiltinType -> Text -> a -> m (Builtin m)
-    add' t n v = wrap t n <$> mkThunk n (toBuiltin (Text.unpack n) v)
+    add' :: ToBuiltin m a => BuiltinType -> Text -> a -> Type -> m (Builtin m)
+    add' t n v p = wrap t n p <$> mkThunk n (toBuiltin (Text.unpack n) v)
 
 -- Primops
 
